@@ -1,0 +1,33 @@
+# Checkpoints — too large for GitHub (13GB+)
+checkpoints/
+
+# Processed .npy chart images — regenerable from raw data
+data/processed/full_season/
+data/processed/situational/
+data/processed/charts/
+
+# Raw Statcast CSV — large, not source code
+data/raw/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Logs and samples (large, auto-generated)
+logs/
+samples/
+
+# VS Code / IDE
+.vscode/
+.idea/

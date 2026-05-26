@@ -1,0 +1,52 @@
+seed: 42
+
+checkpoint_dir: checkpoints/heldout
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  image_size: 64
+  gaussian_sigma_ft: 15
+  min_pa_full_season: 100
+  min_pa_situational: 30
+  inpaint_k_min: 5
+  inpaint_k_max: 100
+  # Scale raw densities (max ~0.008) into a range suitable for N(0,1) DDPM noise.
+  # Must match DENSITY_SCALE in src/data/dataset.py.
+  image_scale: 100.0
+
+model:
+  base_channels: 64
+  channel_multipliers: [1, 2, 4, 8]
+  batter_embedding_dim: 128
+  situation_embedding_dim: 128
+  timestep_embedding_dim: 128
+  attention_heads: 4
+  dropout: 0.1
+
+diffusion:
+  num_timesteps: 1000
+  noise_schedule: cosine
+  cfg_dropout_prob: 0.1
+
+training:
+  batch_size: 16
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-2
+  epochs: 100
+  warmup_steps: 500
+  grad_clip: 1.0
+  save_every_n_epochs: 5
+  sample_every_n_steps: 500
+  num_workers: 0              # 0 = no multiprocessing (avoids MPS fork issues)
+
+evaluation:
+  num_samples: 500
+  calibration_level: 0.80
+  pa_thresholds: [10, 25, 50, 100]
+  min_pa_for_eval: 200
+  # Held-out batters: selected by seed=42 from >=200 PA batters in 2023.
+  # These batters are EXCLUDED from all training data and have NO personal
+  # embedding — they use index 0 (population prior) at inference.
+  held_out_batters: [519058, 519317, 592273, 642715, 643217, 657077, 664702, 666134, 668942, 672515, 686668, 686681]
+  held_out_seed: 42
