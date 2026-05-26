@@ -63,7 +63,6 @@ SITUATIONS = [
     (9,  "Behind vs LHP\nOffspeed"),
     (10, "Behind vs RHP\nFastball"),
     (11, "Behind vs RHP\nOffspeed"),
-    (12, "Full Season"),
 ]
 
 # ---- Load model -----------------------------------------------------------
@@ -72,7 +71,7 @@ with open(PROCESSED_DIR / "batter_id_map.json") as f:
 
 mcfg = cfg["model"]
 unet = ConditionalUNet(
-    num_batters=len(id_map),
+    num_batters=max(id_map.values()) + 1,
     base_channels=mcfg["base_channels"],
     channel_multipliers=tuple(mcfg["channel_multipliers"]),
     batter_embed_dim=mcfg["batter_embedding_dim"],
@@ -112,11 +111,11 @@ COUNT_LABELS = ["Ahead in Count", "Even Count", "Behind in Count"]
 COL_LABELS   = ["vs LHP  Fastball", "vs LHP  Offspeed", "vs RHP  Fastball", "vs RHP  Offspeed"]
 
 ncols = 4
-nrows = 4   # 3 count states + 1 full-season row
+nrows = 3   # 3 count states
 
 fig = plt.figure(figsize=(ncols * 4.5, nrows * 4.2))
 
-# Shared vmax across situational panels only (not full-season) for fair comparison
+# Shared vmax across all situational panels for fair comparison
 sit_vals = np.concatenate([means[c][means[c] > 0] for c in range(12)])
 vmax = float(np.percentile(sit_vals, 98)) if sit_vals.size > 0 else 1e-6
 
@@ -155,14 +154,6 @@ for count_idx, count_label in enumerate(COUNT_LABELS):
         draw_panel(ax, means[code], title, vmax)
         if col_idx == 0:
             ax.set_ylabel(count_label, fontsize=11, fontweight="bold", labelpad=6)
-
-# Full-season panel — centered in last row
-ax_full = fig.add_subplot(gs[3, 1:3])
-fs_vals = means[12][means[12] > 0]
-fs_vmax = float(np.percentile(fs_vals, 98)) if fs_vals.size > 0 else 1e-6
-draw_panel(ax_full, means[12], "Full Season (all situations)", fs_vmax)
-fig.add_subplot(gs[3, 0]).axis("off")
-fig.add_subplot(gs[3, 3]).axis("off")
 
 fig.suptitle(f"{args.batter} — How Spray Chart Changes by Situation\n"
              f"(guidance scale=5.0 · {args.samples} samples · {args.steps} denoising steps)",
