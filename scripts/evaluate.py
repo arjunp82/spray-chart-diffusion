@@ -1,7 +1,7 @@
 """
 Post-training evaluation:
   1. Generate spray charts for 3 batters (mean + uncertainty)
-  2. Sparse-data test (KL vs PA count) — diffusion vs SituationalKDE, multi-batter
+  2. Sparse-data test (KL vs PA count) — diffusion vs HistoricalKDE, multi-batter
   3. Calibration reliability diagram — does the model's 80% credible region contain 80% of real hits?
   4. Inpainting gallery
   5. Save all plots as PNGs
@@ -214,7 +214,7 @@ def task_individual_plots(results):
 
 
 # ---------------------------------------------------------------------------
-# Task 2 — Sparse data test: diffusion vs SituationalKDE, held-out batters
+# Task 2 — Sparse data test: diffusion vs HistoricalKDE, held-out batters
 #
 # Clean evaluation design:
 #   - Batters are from HELD_OUT_MLBAMS — completely excluded from training data
@@ -312,7 +312,7 @@ def task_sparse_data(model, id_map):
         batters_run += 1
 
     print(f"\n  Ran {batters_run} held-out batters × {n_trials} trials each")
-    print(f"\n  {'k':>5}  {'Diffusion':>12}  {'Embed-only':>12}  {'SituKDE':>12}")
+    print(f"\n  {'k':>5}  {'Diffusion':>12}  {'Embed-only':>12}  {'HistKDE':>12}")
     for k in pa_thresholds:
         dm = np.mean(diff_kls[k]) if diff_kls[k] else float("nan")
         em = np.mean(emb_kls[k])  if emb_kls[k]  else float("nan")
@@ -324,7 +324,7 @@ def task_sparse_data(model, id_map):
     for vals, color, marker, ls, label in [
         (diff_kls, "#0066cc", "o", "-",  "Diffusion (population prior + k PAs)"),
         (emb_kls,  "#6600cc", "^", "--", "Embedding-only control (no observed PAs)"),
-        (kde_kls,  "#cc6600", "s", "--", "Situational KDE (k PAs only)"),
+        (kde_kls,  "#cc6600", "s", "--", "Historical KDE (k PAs only)"),
     ]:
         ks    = sorted(vals.keys())
         means = [np.mean(vals[k]) for k in ks]
@@ -564,7 +564,7 @@ if __name__ == "__main__":
     print("\n=== Summary ===")
     print(f"All plots saved to: {OUT_DIR.resolve()}")
     print("\nKL divergence summary (lower is better):")
-    print(f"{'k':>6}  {'Diffusion':>12}  {'SituKDE':>10}")
+    print(f"{'k':>6}  {'Diffusion':>12}  {'HistKDE':>10}")
     for k in sorted(diff_kls):
         dm = np.mean(diff_kls[k]) if diff_kls[k] else float("nan")
         km = np.mean(kde_kls[k])  if kde_kls[k]  else float("nan")
