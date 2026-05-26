@@ -180,6 +180,7 @@ for name, bidx in BATTERS.items():
     safe = name.lower().replace(" ", "_")
     out = f"results/zone_style_{safe}.png"
     fig.savefig(out, dpi=130, bbox_inches="tight", facecolor="white")
+    fig.savefig(out.replace(".png", ".pdf"), bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"  Saved → {out}")
 

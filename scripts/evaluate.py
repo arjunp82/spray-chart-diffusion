@@ -191,6 +191,7 @@ def task_batter_comparison(model, id_map):
 
     path = OUT_DIR / "batter_comparison.png"
     fig.savefig(path, dpi=120, bbox_inches="tight")
+    fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved → {path}")
     return results
@@ -209,6 +210,7 @@ def task_individual_plots(results):
         safe = name.lower().replace(" ", "_")
         path = OUT_DIR / f"batter_{safe}.png"
         fig.savefig(path, dpi=120, bbox_inches="tight")
+        fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved → {path}")
 
@@ -345,6 +347,7 @@ def task_sparse_data(model, id_map):
 
     path = OUT_DIR / "sparse_data_kl.png"
     fig.savefig(path, dpi=120, bbox_inches="tight")
+    fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved → {path}")
 
@@ -489,6 +492,7 @@ def task_calibration(model, id_map):
 
     path = OUT_DIR / "calibration.png"
     fig.savefig(path, dpi=120, bbox_inches="tight")
+    fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved → {path}")
 
@@ -544,6 +548,7 @@ def task_inpaint_gallery(model, id_map, full_chart):
     fig.tight_layout()
     path = OUT_DIR / "inpaint_gallery.png"
     fig.savefig(path, dpi=120, bbox_inches="tight")
+    fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved → {path}")
 

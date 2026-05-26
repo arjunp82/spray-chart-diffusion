@@ -171,5 +171,6 @@ fig.suptitle(f"{args.batter} — How Spray Chart Changes by Situation\n"
 safe = args.batter.lower().replace(" ", "_")
 out = OUT_DIR / f"situation_grid_{safe}.png"
 fig.savefig(out, dpi=120, bbox_inches="tight")
+fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight")
 plt.close(fig)
 print(f"\nSaved → {out}")
