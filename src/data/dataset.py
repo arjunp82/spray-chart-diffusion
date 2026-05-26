@@ -8,12 +8,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from scipy.ndimage import gaussian_filter
 from torch.utils.data import Dataset
 
 from src.data.preprocess import (
     COUNT_STATES,
+    FAIR_MASK,
     HANDEDNESS,
     PITCH_GROUPS,
+    SIGMA_PX,
     SITUATION_CODES,
     coords_to_image,
     normalize_coords,
@@ -172,6 +175,9 @@ class SprayChartDataset(Dataset):
                 return torch.from_numpy(partial).unsqueeze(0) * self.image_scale
 
         # --- Path 2: synthesise from the full density image ---
+        # Apply the same Gaussian blur + fair-mask + normalisation as
+        # coords_to_image() so the partial channel is in-distribution at
+        # both training and eval time.
         if full_image is None or full_image.sum() < 1e-12:
             return torch.zeros(1, 64, 64)
 
@@ -184,8 +190,12 @@ class SprayChartDataset(Dataset):
 
         sampled_idx = np.random.choice(len(flat), size=k, replace=True, p=probs)
         partial_flat = np.bincount(sampled_idx, minlength=len(flat)).astype(np.float32)
-        partial_flat /= partial_flat.sum() + 1e-12
         partial = partial_flat.reshape(full_image.shape)
+        partial = gaussian_filter(partial, sigma=SIGMA_PX)
+        partial *= FAIR_MASK
+        s = partial.sum()
+        if s > 1e-12:
+            partial /= s
         return torch.from_numpy(partial).unsqueeze(0) * self.image_scale
 
     @staticmethod

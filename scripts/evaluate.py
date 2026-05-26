@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.data.preprocess import normalize_coords, coords_to_image, FAIR_MASK
 from src.data.dataset import DENSITY_SCALE
 from src.evaluation.metrics import kl_divergence, calibration_score
-from src.evaluation.baselines import SituationalKDE
+from src.evaluation.baselines import HistoricalKDE
 from src.model.diffusion import SprayChartDiffusion
 from src.model.unet import ConditionalUNet
 from src.analysis.visualize import plot_spray_chart, overlay_zone_pcts, _FIELD_CMAP
@@ -46,7 +46,7 @@ import yaml
 # Config (loaded from YAML; defaults to fast config)
 # ---------------------------------------------------------------------------
 _parser = argparse.ArgumentParser(add_help=False)
-_parser.add_argument("--config", default="configs/fast.yaml")
+_parser.add_argument("--config", default="configs/default.yaml")
 _args, _ = _parser.parse_known_args()
 
 with open(_args.config) as _f:
@@ -280,7 +280,9 @@ def task_sparse_data(model, id_map):
                 sit = torch.full((8,), 12, dtype=torch.long, device=DEVICE)
                 with torch.no_grad():
                     gen = model.inpaint_sample(bat, sit, partial_t,
-                                               num_inference_steps=50, device=DEVICE)
+                                               num_inference_steps=50,
+                                               guidance_scale=GUIDANCE_SCALE,
+                                               device=DEVICE)
                 mean_gen = gen.cpu().numpy()[:, 0].mean(axis=0)
                 diff_kls[k].append(kl_divergence(mean_gen, held_chart))
 
@@ -288,18 +290,20 @@ def task_sparse_data(model, id_map):
                 zeros_t = torch.zeros(8, 1, 64, 64, device=DEVICE)
                 with torch.no_grad():
                     gen_emb = model.inpaint_sample(bat, sit, zeros_t,
-                                                   num_inference_steps=50, device=DEVICE)
+                                                   num_inference_steps=50,
+                                                   guidance_scale=GUIDANCE_SCALE,
+                                                   device=DEVICE)
                 mean_emb = gen_emb.cpu().numpy()[:, 0].mean(axis=0)
                 emb_kls[k].append(kl_divergence(mean_emb, held_chart))
 
-                # --- SituationalKDE (fitted on k conditioning events only) ---
+                # --- HistoricalKDE baseline (fitted on k conditioning events only) ---
+                # Uses all k events as a plain KDE — no situation bucketing,
+                # so it never collapses to uniform at low k.
                 cond_df = events.iloc[cond_idx].copy()
                 try:
-                    kde_sub = SituationalKDE()
+                    kde_sub = HistoricalKDE()
                     kde_sub.fit(cond_df)
-                    kde_pred = kde_sub.predict(mlbam, {"count_state": "even",
-                                                       "p_throws": "R",
-                                                       "pitch_group": "fastball"})
+                    kde_pred = kde_sub.predict(mlbam, {})
                 except Exception:
                     kde_pred = partial_np
                 kde_kls[k].append(kl_divergence(kde_pred, held_chart))
@@ -410,7 +414,9 @@ def task_calibration(model, id_map):
 
                 with torch.no_grad():
                     gen = model.inpaint_sample(bat, sit, partial_t,
-                                               num_inference_steps=50, device=DEVICE)
+                                               num_inference_steps=50,
+                                               guidance_scale=GUIDANCE_SCALE,
+                                               device=DEVICE)
                 samples = gen.cpu().numpy()[:, 0]   # (n_samples, 64, 64)
 
                 # Normalize held-out actual coords
@@ -493,7 +499,7 @@ def task_calibration(model, id_map):
 # Task 4 — Inpainting gallery
 # ---------------------------------------------------------------------------
 def task_inpaint_gallery(model, id_map, full_chart):
-    print("\n=== Task 3: Inpainting gallery ===")
+    print("\n=== Task 4: Inpainting gallery ===")
     mlbam = 518692
     bidx  = id_map[mlbam]
 
@@ -526,7 +532,9 @@ def task_inpaint_gallery(model, id_map, full_chart):
 
         with torch.no_grad():
             gen = model.inpaint_sample(bat, sit, partial_t,
-                                       num_inference_steps=100, device=DEVICE)
+                                       num_inference_steps=100,
+                                       guidance_scale=GUIDANCE_SCALE,
+                                       device=DEVICE)
         mean_gen = gen.cpu().numpy()[:, 0].mean(axis=0)
 
         show_density(axes[0, col], partial_np,  f"k={k} observed\n(partial)")

@@ -142,6 +142,15 @@ def assign_split(year: int) -> str:
     return "test"
 
 
+# Held-out batters: selected by seed=42 from batters with >=200 PA in 2023.
+# These are EXCLUDED from all training data and map to embedding index 0.
+HELD_OUT_BATTERS: frozenset[int] = frozenset([
+    519058, 519317, 592273, 642715, 643217,
+    657077, 664702, 666134, 668942, 672515,
+    686668, 686681,
+])
+
+
 def build_full_season_charts(
     df: pd.DataFrame,
     out_dir: Path,
@@ -217,13 +226,51 @@ def build_situational_charts(
     return records
 
 
-def build_batter_id_map(df: pd.DataFrame, out_dir: Path) -> dict[int, int]:
-    mlbam_ids = sorted(df["batter"].dropna().unique().astype(int).tolist())
-    id_map = {mlbam: idx for idx, mlbam in enumerate(mlbam_ids)}
+def build_batter_id_map(
+    df: pd.DataFrame,
+    out_dir: Path,
+    held_out: frozenset[int] = HELD_OUT_BATTERS,
+) -> dict[int, int]:
+    """
+    Build the batter → embedding-index map.
+
+    Index 0 is reserved as the population-prior / unknown-batter vector.
+    Training batters are assigned indices 1..N in sorted MLBAM order.
+    Held-out batters are present in the JSON but map to index 0 so that
+    inference code can look them up without crashing.
+    """
+    all_ids = sorted(df["batter"].dropna().unique().astype(int).tolist())
+    train_ids = [m for m in all_ids if m not in held_out]
+
+    id_map: dict[int, int] = {}
+    for idx, mlbam in enumerate(train_ids, start=1):   # 1-indexed; 0 = unknown
+        id_map[mlbam] = idx
+    for mlbam in held_out:
+        id_map[mlbam] = 0
+
     with open(out_dir / "batter_id_map.json", "w") as f:
         json.dump({str(k): v for k, v in id_map.items()}, f, indent=2)
-    print(f"Saved batter_id_map.json with {len(id_map)} batters")
+    print(f"Saved batter_id_map.json: {len(train_ids)} training batters "
+          f"(indices 1-{len(train_ids)}), {len(held_out)} held-out (index 0)")
     return id_map
+
+
+def _make_per_batter_split(
+    unique_batters: list[int],
+    seed: int = 42,
+    val_frac: float = 0.10,
+    test_frac: float = 0.10,
+) -> dict[int, str]:
+    """Assign each batter to train / val / test (all-or-nothing per batter)."""
+    rng = np.random.default_rng(seed)
+    n = len(unique_batters)
+    perm = rng.permutation(n)
+    n_val  = max(1, int(n * val_frac))
+    n_test = max(1, int(n * test_frac))
+    val_set  = {unique_batters[i] for i in perm[:n_val]}
+    test_set = {unique_batters[i] for i in perm[n_val:n_val + n_test]}
+    return {b: ("test" if b in test_set else "val" if b in val_set else "train")
+            for b in unique_batters}
 
 
 def preprocess(
@@ -231,6 +278,8 @@ def preprocess(
     processed_dir: Path,
     min_pa_full: int = 100,
     min_pa_sit: int = 30,
+    held_out: frozenset[int] = HELD_OUT_BATTERS,
+    split_seed: int = 42,
 ) -> None:
     df = load_raw(raw_dir)
 
@@ -239,16 +288,28 @@ def preprocess(
     df = df[df["events"] != "foul"]
     print(f"After filtering: {len(df):,} batted balls")
 
-    build_batter_id_map(df, processed_dir)
+    # Remove held-out batters from the training dataframe entirely
+    df_train = df[~df["batter"].isin(held_out)].copy()
+    print(f"After removing {len(held_out)} held-out batters: {len(df_train):,} events")
 
+    build_batter_id_map(df, processed_dir, held_out=held_out)
+
+    # Build charts from training batters only
     records: list[dict] = []
-    records += build_full_season_charts(df, processed_dir, min_pa=min_pa_full)
-    records += build_situational_charts(df, processed_dir, min_pa=min_pa_sit)
+    records += build_full_season_charts(df_train, processed_dir, min_pa=min_pa_full)
+    records += build_situational_charts(df_train, processed_dir, min_pa=min_pa_sit)
 
+    # Assign per-batter split (no batter appears in more than one split)
     meta = pd.DataFrame(records)
+    unique_batters = sorted(meta["batter_id"].unique().tolist())
+    batter_split = _make_per_batter_split(unique_batters, seed=split_seed)
+    meta["split"] = meta["batter_id"].map(batter_split)
+
     meta.to_csv(processed_dir / "metadata.csv", index=False)
     print(f"\nMetadata saved: {len(meta)} total charts")
     print(meta["split"].value_counts().to_string())
+    assert meta.groupby("batter_id")["split"].nunique().max() == 1, \
+        "BUG: a batter appears in more than one split"
 
 
 def main() -> None:
@@ -257,8 +318,11 @@ def main() -> None:
     parser.add_argument("--processed-dir", type=Path, default=Path("data/processed"))
     parser.add_argument("--min-pa-full", type=int, default=100)
     parser.add_argument("--min-pa-sit", type=int, default=30)
+    parser.add_argument("--split-seed", type=int, default=42)
     args = parser.parse_args()
-    preprocess(args.raw_dir, args.processed_dir, args.min_pa_full, args.min_pa_sit)
+    preprocess(args.raw_dir, args.processed_dir,
+               args.min_pa_full, args.min_pa_sit,
+               split_seed=args.split_seed)
 
 
 if __name__ == "__main__":
