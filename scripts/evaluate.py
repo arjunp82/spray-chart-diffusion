@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.preprocess import normalize_coords, coords_to_image, FAIR_MASK
 from src.data.dataset import DENSITY_SCALE
-from src.evaluation.metrics import kl_divergence, calibration_score
+from src.evaluation.metrics import kl_divergence, calibration_score, zone_accuracy
 from src.evaluation.baselines import HistoricalKDE
 from src.model.diffusion import SprayChartDiffusion
 from src.model.unet import ConditionalUNet
@@ -314,12 +314,21 @@ def task_sparse_data(model, id_map):
         batters_run += 1
 
     print(f"\n  Ran {batters_run} held-out batters × {n_trials} trials each")
-    print(f"\n  {'k':>5}  {'Diffusion':>12}  {'Embed-only':>12}  {'HistKDE':>12}")
+    print(f"\n  {'k':>5}  {'Diffusion':>12}  {'Embed-only':>12}  {'HistKDE':>12}  {'Wilcoxon p':>12}")
+    from scipy.stats import wilcoxon
     for k in pa_thresholds:
         dm = np.mean(diff_kls[k]) if diff_kls[k] else float("nan")
         em = np.mean(emb_kls[k])  if emb_kls[k]  else float("nan")
         km = np.mean(kde_kls[k])  if kde_kls[k]  else float("nan")
-        print(f"  {k:>5}  {dm:>12.4f}  {em:>12.4f}  {km:>12.4f}")
+        # Paired Wilcoxon: diffusion vs HistoricalKDE (one value per batter per trial)
+        if len(diff_kls[k]) >= 2 and len(kde_kls[k]) >= 2:
+            try:
+                stat, pval = wilcoxon(diff_kls[k], kde_kls[k], alternative="less")
+            except Exception:
+                pval = float("nan")
+        else:
+            pval = float("nan")
+        print(f"  {k:>5}  {dm:>12.4f}  {em:>12.4f}  {km:>12.4f}  {pval:>12.4f}")
 
     # Plot
     fig, ax = plt.subplots(figsize=(7, 4.5))
@@ -504,18 +513,23 @@ def task_calibration(model, id_map):
 # ---------------------------------------------------------------------------
 def task_inpaint_gallery(model, id_map, full_chart):
     print("\n=== Task 4: Inpainting gallery ===")
-    mlbam = 518692
-    bidx  = id_map[mlbam]
+    # Use a held-out batter so the gallery matches the sparse-data evaluation
+    mlbam = HELD_OUT_MLBAMS[0]   # first held-out batter; maps to population prior
+    bidx  = POPULATION_PRIOR_IDX
 
     raw = pd.read_csv(RAW_DIR / "statcast_2023.csv", low_memory=False)
     events = raw[raw["batter"] == mlbam].dropna(subset=["hc_x", "hc_y"])
     hx, hy = events["hc_x"].values, events["hc_y"].values
 
+    # Ground truth: full-season chart for this held-out batter
+    xn_full, yn_full = normalize_coords(hx, hy)
+    held_full_chart = coords_to_image(xn_full, yn_full)
+
     ks = [10, 25, 50, 100]
     fig, axes = plt.subplots(2, len(ks) + 1, figsize=(4 * (len(ks) + 1), 8))
 
     # Full chart in first column
-    show_density(axes[0, 0], full_chart, "Full season\n(ground truth)")
+    show_density(axes[0, 0], held_full_chart, "Full season\n(ground truth)")
     axes[1, 0].axis("off")
 
     for col, k in enumerate(ks, start=1):
@@ -544,9 +558,98 @@ def task_inpaint_gallery(model, id_map, full_chart):
         show_density(axes[0, col], partial_np,  f"k={k} observed\n(partial)")
         show_density(axes[1, col], mean_gen, f"Inpainted\n(k={k})")
 
-    fig.suptitle("Freddie Freeman — Inpainting at Different PA Counts", fontsize=11)
+    fig.suptitle(f"Held-Out Batter (MLBAM {mlbam}) — Inpainting at Different PA Counts\n"
+                 f"Population-prior embedding (index 0) · no batter identity at inference",
+                 fontsize=10)
     fig.tight_layout()
     path = OUT_DIR / "inpaint_gallery.png"
+    fig.savefig(path, dpi=120, bbox_inches="tight")
+    fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved → {path}")
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — Situational zone accuracy
+# ---------------------------------------------------------------------------
+def task_zone_accuracy(model, id_map):
+    """
+    For each of the 12 situations, generate samples for several training batters
+    and compare predicted zone probabilities to actual 2023 frequencies.
+    Saves a heatmap of (predicted - actual) error per zone per situation.
+    """
+    print("\n=== Task 5: Situational zone accuracy ===")
+
+    from src.data.preprocess import SITUATION_CODES, COUNT_STATES, HANDEDNESS, PITCH_GROUPS, PITCH_TYPE_MAP
+
+    raw = pd.read_csv(RAW_DIR / "statcast_2023.csv", low_memory=False)
+    raw["pitch_group"] = raw["pitch_type"].map(PITCH_TYPE_MAP)
+    raw["count_state"] = raw.apply(
+        lambda r: ("ahead" if r["balls"] > r["strikes"] else
+                   "behind" if r["strikes"] > r["balls"] else "even")
+        if pd.notna(r["balls"]) and pd.notna(r["strikes"]) else None, axis=1
+    )
+    raw = raw.dropna(subset=["hc_x", "hc_y", "pitch_group", "p_throws", "count_state"])
+
+    # Use val-split batters that have a personal embedding
+    meta = pd.read_csv(Path(_cfg["data"]["processed_dir"]) / "metadata.csv")
+    val_batters = meta[meta["split"] == "val"]["batter_id"].unique().tolist()[:8]
+
+    ZONE_NAMES = ["pull_gb", "pull_ld", "pull_fb",
+                  "center_gb", "center_ld", "center_fb",
+                  "oppo_gb", "oppo_ld", "oppo_fb"]
+
+    # pred_err[sit_code][zone] = mean(pred - actual) across batters
+    sit_codes = sorted(SITUATION_CODES.values())
+    sit_labels = [k for k, v in sorted(SITUATION_CODES.items(), key=lambda x: x[1])]
+    pred_errors = np.zeros((len(sit_codes), len(ZONE_NAMES)))
+
+    for si, (sit_label, sit_code) in enumerate(sorted(SITUATION_CODES.items(), key=lambda x: x[1])):
+        cs, hand, pt = sit_label.split("_", 2)
+        batter_errors = []
+        for mlbam in val_batters:
+            bidx = id_map.get(mlbam, 0)
+            # Actual coords for this batter × situation
+            mask = (
+                (raw["batter"] == mlbam) &
+                (raw["count_state"] == cs) &
+                (raw["p_throws"] == hand) &
+                (raw["pitch_group"] == pt)
+            )
+            sub = raw[mask]
+            if len(sub) < 10:
+                continue
+            xn, yn = normalize_coords(sub["hc_x"].values, sub["hc_y"].values)
+            actual_coords = np.stack([xn, yn], axis=1)
+
+            bat = torch.tensor([bidx] * NUM_SAMPLES, device=DEVICE)
+            sit = torch.tensor([sit_code] * NUM_SAMPLES, device=DEVICE)
+            with torch.no_grad():
+                imgs = model.sample(bat, sit, num_inference_steps=INFER_STEPS,
+                                    guidance_scale=GUIDANCE_SCALE, device=DEVICE)
+            samples = imgs.cpu().numpy()[:, 0]   # (N, 64, 64)
+
+            za = zone_accuracy(samples, actual_coords)
+            errs = [za[z][0] - za[z][1] for z in ZONE_NAMES]
+            batter_errors.append(errs)
+
+        if batter_errors:
+            pred_errors[si] = np.mean(batter_errors, axis=0)
+
+    # Plot heatmap
+    fig, ax = plt.subplots(figsize=(11, 5))
+    im = ax.imshow(pred_errors, cmap="RdBu_r", vmin=-0.15, vmax=0.15, aspect="auto")
+    ax.set_xticks(range(len(ZONE_NAMES)))
+    ax.set_xticklabels([z.replace("_", "\n") for z in ZONE_NAMES], fontsize=9)
+    ax.set_yticks(range(len(sit_labels)))
+    ax.set_yticklabels([s.replace("_", " ") for s in sit_labels], fontsize=8)
+    ax.set_xlabel("Zone", fontsize=11)
+    ax.set_title("Predicted − Actual Zone Probability\n(red = over-predicted, blue = under-predicted)",
+                 fontsize=11)
+    fig.colorbar(im, ax=ax, label="Δ probability")
+    fig.tight_layout()
+
+    path = OUT_DIR / "zone_accuracy.png"
     fig.savefig(path, dpi=120, bbox_inches="tight")
     fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
@@ -565,6 +668,7 @@ if __name__ == "__main__":
     diff_kls, kde_kls, full_chart = task_sparse_data(model, id_map)
     task_calibration(model, id_map)
     task_inpaint_gallery(model, id_map, full_chart)
+    task_zone_accuracy(model, id_map)
 
     print("\n=== Summary ===")
     print(f"All plots saved to: {OUT_DIR.resolve()}")
